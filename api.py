@@ -47,8 +47,7 @@ class Field:
         self.nullable = nullable
         self._value = None
 
-    @staticmethod
-    def value_processing(value):
+    def value_processing(self, value):
         return value
 
     def validate(self, value):
@@ -87,8 +86,7 @@ class EmailField(CharField):
 
 
 class PhoneField(CharField):
-    @staticmethod
-    def value_processing(value):
+    def value_processing(self, value):
         return str(value) if isinstance(value, int) else value
 
     def validate(self, value):
@@ -100,8 +98,7 @@ class PhoneField(CharField):
 
 
 class DateField(Field):
-    @staticmethod
-    def value_processing(value):
+    def value_processing(self, value):
         return datetime.datetime.strptime(value, '%d.%m.%Y')
 
     field_type = datetime.datetime
@@ -141,7 +138,7 @@ class BaseRequest:
 
     def validate(self, data_dict):
         logging.info(data_dict)
-        fields = [(key, getattr(self.__class__, key)) for key in self.__dir__()]
+        fields = [(key, getattr(self.__class__, key)) for key in self.__class__.__dict__]
         for key, field in fields:
             if isinstance(field, Field) and field.required and key not in data_dict.keys():
                 raise ValueError(f'Validation error - require field "{key}"')
@@ -151,7 +148,7 @@ class BaseRequest:
             setattr(self, key, data_dict[key])
 
     @classmethod
-    def load_and_get_element(cls, data_dict):
+    def from_dict(cls, data_dict):
         self = cls()
         self.validate(data_dict)
         self.load(data_dict)
@@ -218,34 +215,50 @@ def check_auth(request):
     return False
 
 
+def online_score_handler(store, arguments, is_admin):
+    inner = OnlineScoreRequest().from_dict(arguments)
+    if is_admin:
+        response = {'score': 42}
+    else:
+        response = {
+            'score': get_score(
+                store,
+                inner.phone,
+                inner.email,
+                inner.birthday,
+                inner.gender,
+                inner.first_name,
+                inner.last_name
+            )
+        }
+    return response, inner.context
+
+
+def clients_interests_handler(store, arguments):
+    inner = ClientsInterestsRequest().from_dict(arguments)
+    response = {key: get_interests(store, key) for key in inner.client_ids}
+    return response, inner.context
+
+
 def method_handler(request, ctx, store):
-    response, code = None, None
-    inner = None
+    response, code, context = None, None, None
     try:
-        method_request = MethodRequest().load_and_get_element(request['body'])
+        method_request = MethodRequest().from_dict(request['body'])
         if not check_auth(method_request):
             code = FORBIDDEN
         else:
             if method_request.method == 'online_score':
-                inner = OnlineScoreRequest().load_and_get_element(method_request.arguments)
-                if method_request.is_admin:
-                    response = {'score': 42}
-                else:
-                    response = {
-                        'score': get_score(
-                            store,
-                            inner.phone,
-                            inner.email,
-                            inner.birthday,
-                            inner.gender,
-                            inner.first_name,
-                            inner.last_name
-                        )
-                    }
+                response, context = online_score_handler(
+                    store,
+                    method_request.arguments,
+                    method_request.is_admin
+                )
                 code = OK
             elif method_request.method == 'clients_interests':
-                inner = ClientsInterestsRequest().load_and_get_element(method_request.arguments)
-                response = {key: get_interests(store, key) for key in inner.client_ids}
+                response, context = clients_interests_handler(
+                    store,
+                    method_request.arguments
+                )
                 code = OK
             else:
                 code = NOT_FOUND
@@ -254,8 +267,8 @@ def method_handler(request, ctx, store):
     except Exception as e:
         logging.exception(e)
 
-    if inner and hasattr(inner, 'context'):
-        ctx.update(inner.context)
+    if context:
+        ctx.update(context)
 
     return response, code
 
