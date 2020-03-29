@@ -10,6 +10,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from optparse import OptionParser
 
 from scoring import get_score, get_interests
+from store import Storage
 
 SALT = "Otus"
 ADMIN_LOGIN = "admin"
@@ -59,12 +60,12 @@ class Field:
     def __get__(self, obj, cls):
         if obj is None:
             return self
-        return self._value
+        return obj.__dict__.get(self.name)
 
     def __set__(self, obj, value):
         value = self.value_processing(value)
         self.validate(value)
-        self._value = value
+        obj.__dict__[self.name] = value
 
     def __set_name__(self, owner, name):
         self.name = name
@@ -99,6 +100,8 @@ class PhoneField(CharField):
 
 class DateField(Field):
     def value_processing(self, value):
+        if not isinstance(value, str):
+            raise ValueError(f'Wrong type for field "{self.name}"')
         return datetime.datetime.strptime(value, '%d.%m.%Y')
 
     field_type = datetime.datetime
@@ -120,7 +123,7 @@ class GenderField(Field):
     def validate(self, value):
         super().validate(value)
         if value not in range(len(GENDERS)):
-            raise ValueError(f'Gender must be in {range(len(GENDERS))}')
+            raise ValueError(f'Gender must be in {range(len(GENDERS)-1)}')
 
 
 class ClientIDsField(Field):
@@ -210,6 +213,8 @@ def check_auth(request):
     else:
         hash_str = request.account + request.login + SALT
     digest = hashlib.sha512(hash_str.encode('UTF8')).hexdigest()
+    logging.info(hash_str)
+    logging.info(digest)
     if digest == request.token:
         return True
     return False
@@ -218,7 +223,7 @@ def check_auth(request):
 def online_score_handler(store, arguments, is_admin):
     inner = OnlineScoreRequest().from_dict(arguments)
     if is_admin:
-        response = {'score': 42}
+        response = {'score': '42'}
     else:
         response = {
             'score': get_score(
@@ -242,8 +247,10 @@ def clients_interests_handler(store, arguments):
 
 def method_handler(request, ctx, store):
     response, code, context = None, None, None
+    print(request['body'])
     try:
         method_request = MethodRequest().from_dict(request['body'])
+        print(method_request.account)
         if not check_auth(method_request):
             code = FORBIDDEN
         else:
@@ -266,10 +273,12 @@ def method_handler(request, ctx, store):
         response, code = str(e), INVALID_REQUEST
     except Exception as e:
         logging.exception(e)
+        response, code = ERRORS[INTERNAL_ERROR], INTERNAL_ERROR
+        print(request['body'])
 
     if context:
         ctx.update(context)
-
+    print(response, code)
     return response, code
 
 
@@ -277,7 +286,7 @@ class MainHTTPHandler(BaseHTTPRequestHandler):
     router = {
         "method": method_handler
     }
-    store = None
+    store = Storage(db=0, timeout=1000)
 
     def get_request_id(self, headers):
         return headers.get('HTTP_X_REQUEST_ID', uuid.uuid4().hex)
