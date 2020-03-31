@@ -59,12 +59,12 @@ class Field:
     def __get__(self, obj, cls):
         if obj is None:
             return self
-        return self._value
+        return obj.__dict__.get(self.name)
 
     def __set__(self, obj, value):
         value = self.value_processing(value)
         self.validate(value)
-        self._value = value
+        obj.__dict__[self.name] = value
 
     def __set_name__(self, owner, name):
         self.name = name
